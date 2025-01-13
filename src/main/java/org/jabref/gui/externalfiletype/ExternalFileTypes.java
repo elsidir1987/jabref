@@ -16,7 +16,7 @@ import org.jabref.logic.util.io.FileUtil;
 import org.jabref.model.entry.LinkedFile;
 import org.jabref.model.strings.StringUtil;
 
-import static org.apache.pdfbox.pdmodel.documentinterchange.taggedpdf.StandardStructureTypes.types;
+
 
 // Do not make this class final, as it otherwise can't be mocked for tests
 public class ExternalFileTypes {
@@ -25,7 +25,7 @@ public class ExternalFileTypes {
     // modifications, in order to indicate a removed default file type:
     private static final String FILE_TYPE_REMOVED_FLAG = "REMOVED";
     private static final ExternalFileType HTML_FALLBACK_TYPE = StandardExternalFileType.URL;
-    private static String name;
+
 
     private ExternalFileTypes() {
     }
