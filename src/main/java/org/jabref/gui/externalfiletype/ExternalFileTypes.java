@@ -16,6 +16,8 @@ import org.jabref.logic.util.io.FileUtil;
 import org.jabref.model.entry.LinkedFile;
 import org.jabref.model.strings.StringUtil;
 
+import static org.apache.pdfbox.pdmodel.documentinterchange.taggedpdf.StandardStructureTypes.types;
+
 // Do not make this class final, as it otherwise can't be mocked for tests
 public class ExternalFileTypes {
 
@@ -23,6 +25,7 @@ public class ExternalFileTypes {
     // modifications, in order to indicate a removed default file type:
     private static final String FILE_TYPE_REMOVED_FLAG = "REMOVED";
     private static final ExternalFileType HTML_FALLBACK_TYPE = StandardExternalFileType.URL;
+    private static String name;
 
     private ExternalFileTypes() {
     }
@@ -194,7 +197,7 @@ public class ExternalFileTypes {
      * Set up the list of external file types, either from default values, or from values recorded in PreferencesService.
      */
     public static Set<ExternalFileType> fromString(String storedFileTypes) {
-        // First get a list of the default file types as a starting point:
+        // We start with a default list of file types.
         Set<ExternalFileType> types = new HashSet<>(getDefaultExternalFileTypes());
 
         // If no changes have been stored, simply use the defaults:
@@ -202,44 +205,42 @@ public class ExternalFileTypes {
             return types;
         }
 
-        // Read the prefs information for file types:
-        String[][] vals = StringUtil.decodeStringDoubleArray(storedFileTypes);
-        for (String[] val : vals) {
-            if ((val.length == 2) && FILE_TYPE_REMOVED_FLAG.equals(val[1])) {
-                // This entry indicates that a default entry type should be removed:
-                ExternalFileType toRemove = null;
-                for (ExternalFileType type : types) {
-                    if (type.getName().equals(val[0])) {
-                        toRemove = type;
-                        break;
-                    }
-                }
-                // If we found it, remove it from the type list:
-                if (toRemove != null) {
-                    types.remove(toRemove);
-                }
-            } else {
-                // A new or modified entry type. Construct it from the string array:
-                ExternalFileType type = CustomExternalFileType.buildFromArgs(val);
-                // Check if there is a default type with the same extension. If so, this is a
-                // modification of that type, so remove the default one:
-                ExternalFileType toRemove = null;
-                for (ExternalFileType defType : types) {
-                    if (type.getExtension().equals(defType.getExtension())) {
-                        toRemove = defType;
-                        break;
-                    }
-                }
-                // If we found it, remove it from the type list:
-                if (toRemove != null) {
-                    types.remove(toRemove);
-                }
+        // Separated the logic for processing stored types into a separate method for better readability.
+        processStoredFileTypes(StringUtil.decodeStringDoubleArray(storedFileTypes), types);
 
-                // Then add the new one:
-                types.add(type);
+        return types;
+    }
+
+    private static void processStoredFileTypes(String[][] vals, Set<ExternalFileType> types) {
+        // Manages the logic for processing deleted and modified file types.
+        // Uses reusable methods for removing and replacing types.
+        for (String[] val : vals) {
+            if (val.length == 2 && FILE_TYPE_REMOVED_FLAG.equals(val[1])) {
+                // Processes types marked as "REMOVED".
+                removeTypeByName(val[0], types);
+            } else {
+                // Processes new or modified file types.
+                ExternalFileType newType = CustomExternalFileType.buildFromArgs(val);
+                replaceOrAddType(newType, types);
             }
         }
+    }
+    private static void replaceOrAddType(ExternalFileType newType, Set<ExternalFileType> types) {
+        // Removes existing types with the same extension and adds the new type.
+        // Eliminates repetitive logic and increases reuse.
+        types.removeIf(existingType -> existingType.getExtension().equals(newType.getExtension()));
+        types.add(newType);
+    }
+    private static void removeTypeByName(String name, Set<ExternalFileType> types) {
+        // Finds and removes a file type by name.
+        // Using the stream API improves readability and reduces complexity.
+        types.stream()
+                .filter(type -> type.getName().equals(name))
+                .findFirst()
+                .ifPresent(types::remove);
+    }
 
+        // Ensure 'types' is correctly scoped. Return the initialized 'types' set.
         return types;
     }
 }
