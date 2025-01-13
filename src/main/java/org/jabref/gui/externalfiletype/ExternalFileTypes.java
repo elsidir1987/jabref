@@ -241,6 +241,5 @@ public class ExternalFileTypes {
     }
 
         // Ensure 'types' is correctly scoped. Return the initialized 'types' set.
-        return types;
-    }
+
 }
