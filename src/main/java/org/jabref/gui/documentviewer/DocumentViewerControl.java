@@ -88,32 +88,38 @@ public class DocumentViewerControl extends StackPane {
             }
         });
     }
-
+    //Check control
     private void updateCurrentPage(ObservableList<DocumentViewerPage> visiblePages) {
         if (flow == null) {
             return;
         }
 
-        // We try to find the page that is displayed in the center of the viewport
-        Optional<DocumentViewerPage> inMiddleOfViewport = Optional.empty();
+        Optional<DocumentViewerPage> inMiddleOfViewport = findPageInMiddleOfViewport();
+
+        int pageNumber = inMiddleOfViewport
+                .map(DocumentViewerPage::getPageNumber)
+                .orElseGet(() -> getFirstVisiblePageNumber(visiblePages));
+
+        currentPage.set(pageNumber);
+    }
+    //finds page inMiddleOfViewport
+    private Optional<DocumentViewerPage> findPageInMiddleOfViewport() {
         try {
             VirtualFlowHit<DocumentViewerPage> hit = flow.hit(0, flow.getHeight() / 2);
             if (hit.isCellHit()) {
-                // Successful hit
-                inMiddleOfViewport = Optional.of(hit.getCell());
+                return Optional.of(hit.getCell());
             }
         } catch (NoSuchElementException exception) {
-            // Sometimes throws exception if no page is found -> ignore
+            // Log or handle exception if needed
         }
-
-        if (inMiddleOfViewport.isPresent()) {
-            // Successful hit
-            currentPage.set(inMiddleOfViewport.get().getPageNumber());
-        } else {
-            // Heuristic missed, so try to get page number from first shown page
-            currentPage.set(
-                    visiblePages.stream().findFirst().map(DocumentViewerPage::getPageNumber).orElse(1));
-        }
+        return Optional.empty();
+    }
+    //inform the current page
+    private int getFirstVisiblePageNumber(ObservableList<DocumentViewerPage> visiblePages) {
+        return visiblePages.stream()
+                .findFirst()
+                .map(DocumentViewerPage::getPageNumber)
+                .orElse(1);
     }
 
     public void setPageWidth(double width) {

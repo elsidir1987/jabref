@@ -87,99 +87,92 @@ public class PdfContentImporter extends PdfImporter {
         }
         return result;
     }
-
+    //find different formats
     private String streamlineNames(String names) {
-        // TODO: replace with NormalizeNamesFormatter?!
-        String res;
-        // supported formats:
-        //   Matthias Schrepfer1, Johannes Wolf1, Jan Mendling1, and Hajo A. Reijers2
         if (names.contains(",")) {
-            String[] splitNames = names.split(",");
-            res = "";
-            boolean isFirst = true;
-            for (String splitName : splitNames) {
-                String curName = removeNonLettersAtEnd(splitName);
-                if (curName.indexOf("and") == 0) {
-                    // skip possible ands between names
-                    curName = curName.substring(3).trim();
-                } else {
-                    int posAnd = curName.indexOf(" and ");
-                    if (posAnd >= 0) {
-                        String nameBefore = curName.substring(0, posAnd);
-                        // cannot be first name as "," is contained in the string
-                        res = res.concat(" and ").concat(removeNonLettersAtEnd(nameBefore));
-                        curName = curName.substring(posAnd + 5);
-                    }
-                }
-
-                if (!curName.isEmpty()) {
-                    if ("et al.".equalsIgnoreCase(curName)) {
-                        curName = "others";
-                    }
-                    if (isFirst) {
-                        isFirst = false;
-                    } else {
-                        res = res.concat(" and ");
-                    }
-                    res = res.concat(curName);
-                }
-            }
+            return handleCommaSeparatedNames(names);
         } else {
-            // assumption: names separated by space
+            return handleSpaceSeparatedNames(names);
+        }
+    }
 
-            String[] splitNames = names.split(" ");
-            if (splitNames.length == 0) {
-                // empty names... something was really wrong...
-                return "";
+    private String handleCommaSeparatedNames(String names) {
+        String[] splitNames = names.split(",");
+        StringBuilder result = new StringBuilder();
+        boolean isFirst = true;
+
+        for (String splitName : splitNames) {
+            String curName = removeNonLettersAtEnd(splitName.trim());
+
+            if (curName.startsWith("and")) {
+                curName = curName.substring(3).trim();
+            } else {
+                int posAnd = curName.indexOf(" and ");
+                if (posAnd >= 0) {
+                    result.append(" and ")
+                            .append(removeNonLettersAtEnd(curName.substring(0, posAnd).trim()));
+                    curName = curName.substring(posAnd + 5).trim();
+                }
             }
 
-            boolean workedOnFirstOrMiddle = false;
-            boolean isFirst = true;
-            int i = 0;
-            res = "";
-            do {
-                if (workedOnFirstOrMiddle) {
-                    // last item was a first or a middle name
-                    // we have to check whether we are on a middle name
-                    // if not, just add the item as last name and add an "and"
-                    if (splitNames[i].contains(".")) {
-                        // we found a middle name
-                        res = res.concat(splitNames[i]).concat(" ");
-                    } else {
-                        // last name found
-                        res = res.concat(removeNonLettersAtEnd(splitNames[i]));
-
-                        if (!splitNames[i].isEmpty() && Character.isLowerCase(splitNames[i].charAt(0))) {
-                            // it is probably be "van", "vom", ...
-                            // we just rely on the fact that these things are written in lower case letters
-                            // do NOT finish name
-                            res = res.concat(" ");
-                        } else {
-                            // finish this name
-                            workedOnFirstOrMiddle = false;
-                        }
-                    }
-                } else {
-                    if (!"and".equalsIgnoreCase(splitNames[i])) {
-                        if (isFirst) {
-                            isFirst = false;
-                        } else {
-                            res = res.concat(" and ");
-                        }
-                        if ("et".equalsIgnoreCase(splitNames[i]) && (splitNames.length > (i + 1))
-                                && "al.".equalsIgnoreCase(splitNames[i + 1])) {
-                            res = res.concat("others");
-                            break;
-                        } else {
-                            res = res.concat(splitNames[i]).concat(" ");
-                            workedOnFirstOrMiddle = true;
-                        }
-                    }  // do nothing, just increment i at the end of this iteration
+            if (!curName.isEmpty()) {
+                if ("et al.".equalsIgnoreCase(curName)) {
+                    curName = "others";
                 }
-                i++;
-            } while (i < splitNames.length);
+                if (!isFirst) {
+                    result.append(" and ");
+                }
+                result.append(curName);
+                isFirst = false;
+            }
         }
-        return res;
+
+        return result.toString();
+    }
+
+    private String handleSpaceSeparatedNames(String names) {
+        String[] splitNames = names.split(" ");
+        if (splitNames.length == 0) {
+            return "";
+        }
+
+        StringBuilder result = new StringBuilder();
+        boolean workedOnFirstOrMiddle = false;
+        boolean isFirst = true;
+
+        for (int i = 0; i < splitNames.length; i++) {
+            String current = splitNames[i];
+
+            if (workedOnFirstOrMiddle) {
+                if (current.contains(".")) {
+                    result.append(current).append(" ");
+                } else {
+                    result.append(removeNonLettersAtEnd(current));
+                    if (Character.isLowerCase(current.charAt(0))) {
+                        result.append(" ");
+                    } else {
+                        workedOnFirstOrMiddle = false;
+                    }
+                }
+            } else {
+                if (!"and".equalsIgnoreCase(current)) {
+                    if (!isFirst) {
+                        result.append(" and ");
+                    }
+                    if ("et".equalsIgnoreCase(current) && i + 1 < splitNames.length
+                            && "al.".equalsIgnoreCase(splitNames[i + 1])) {
+                        result.append("others");
+                        break;
+                    } else {
+                        result.append(current).append(" ");
+                        workedOnFirstOrMiddle = true;
+                    }
+                    isFirst = false;
+                }
+            }
+        }
+
+        return result.toString();
     }
 
     private String streamlineTitle(String title) {

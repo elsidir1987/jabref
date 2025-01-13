@@ -130,38 +130,56 @@ public class ArgumentProcessor {
         LOGGER.debug("Importing file {}", importArguments);
         String[] data = importArguments.split(",");
 
-        String address = data[0];
-        Path file;
-        if (address.startsWith("http://") || address.startsWith("https://") || address.startsWith("ftp://")) {
-            // Download web resource to temporary file
-            try {
-                file = new URLDownload(address).toTemporaryFile();
-            } catch (FetcherException | MalformedURLException e) {
-                System.err.println(Localization.lang("Problem downloading from %1", address) + e.getLocalizedMessage());
-                return Optional.empty();
-            }
-        } else {
-            if (OS.WINDOWS) {
-                file = Path.of(address);
-            } else {
-                file = Path.of(address.replace("~", System.getProperty("user.home")));
-            }
+        Path file = resolveFilePath(data[0]);
+        if (file == null) {
+            return Optional.empty();
         }
 
-        String importFormat;
-        if (data.length > 1) {
-            importFormat = data[1];
-        } else {
-            importFormat = "*";
-        }
-
+        String importFormat = resolveImportFormat(data);
         Optional<ParserResult> importResult = importFile(file, importFormat);
-        importResult.ifPresent(result -> {
-            if (result.hasWarnings()) {
-                System.out.println(result.getErrorMessage());
-            }
-        });
+
+        importResult.ifPresent(this::logWarnings);
         return importResult;
+    }
+
+    private Path resolveFilePath(String address) {
+        if (isUrl(address)) {
+            return downloadFileFromUrl(address);
+        } else {
+            return resolveLocalPath(address);
+        }
+    }
+
+    private boolean isUrl(String address) {
+        return address.startsWith("http://") || address.startsWith("https://") || address.startsWith("ftp://");
+    }
+
+    //handles the URLs
+    private Path downloadFileFromUrl(String address) {
+        try {
+            return new URLDownload(address).toTemporaryFile();
+        } catch (FetcherException | MalformedURLException e) {
+            System.err.println(Localization.lang("Problem downloading from %1", address) + e.getLocalizedMessage());
+            return null;
+        }
+    }
+
+    private Path resolveLocalPath(String address) {
+        if (OS.WINDOWS) {
+            return Path.of(address);
+        } else {
+            return Path.of(address.replace("~", System.getProperty("user.home")));
+        }
+    }
+
+    private String resolveImportFormat(String[] data) {
+        return (data.length > 1) ? data[1] : "*";
+    }
+
+    private void logWarnings(ParserResult result) {
+        if (result.hasWarnings()) {
+            System.out.println(result.getErrorMessage());
+        }
     }
 
     private Optional<ParserResult> importFile(Path file, String importFormat) {
