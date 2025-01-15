@@ -137,7 +137,6 @@ public class BackupManager {
     /**
      * Checks whether a backup file exists for the given database file. If it exists, it is checked whether it is
      * newer and different from the original.
-     *
      * In case a discarded file is present, the method also returns <code>false</code>, See also {@link #discardBackup(Path)}.
      *
      * @param originalPath Path to the file a backup should be checked for. Example: jabref.bib.
@@ -147,6 +146,16 @@ public class BackupManager {
      * In the case of an exception <code>true</code> is returned to ensure that the user checks the output.
      */
     public static boolean backupFileDiffers(Path originalPath, Path backupDir) {
+        if (checkForDiscardedFile(originalPath, backupDir)) {
+            return false;
+        }
+
+        return getLatestBackupPath(originalPath, backupDir)
+                .map(latestBackupPath -> compareBackupWithOriginal(originalPath, latestBackupPath))
+                .orElse(false);
+    }
+
+    private static boolean checkForDiscardedFile(Path originalPath, Path backupDir) {
         Path discardedFile = determineDiscardedFile(originalPath, backupDir);
         if (Files.exists(discardedFile)) {
             try {
@@ -157,41 +166,46 @@ public class BackupManager {
             }
             return false;
         }
-        return getLatestBackupPath(originalPath, backupDir).map(latestBackupPath -> {
-            FileTime latestBackupFileLastModifiedTime;
-            try {
-                latestBackupFileLastModifiedTime = Files.getLastModifiedTime(latestBackupPath);
-            } catch (IOException e) {
-                LOGGER.debug("Could not get timestamp of backup file {}", latestBackupPath, e);
-                // If we cannot get the timestamp, we do show any warning
-                return false;
-            }
-            FileTime currentFileLastModifiedTime;
-            try {
-                currentFileLastModifiedTime = Files.getLastModifiedTime(originalPath);
-            } catch (IOException e) {
-                LOGGER.debug("Could not get timestamp of current file file {}", originalPath, e);
-                // If we cannot get the timestamp, we do show any warning
-                return false;
-            }
-            if (latestBackupFileLastModifiedTime.compareTo(currentFileLastModifiedTime) <= 0) {
-                // Backup is older than current file
-                // We treat the backup as non-different (even if it could differ)
-                return false;
-            }
-            try {
-                boolean result = Files.mismatch(originalPath, latestBackupPath) != -1L;
-                if (result) {
-                    LOGGER.info("Backup file {} differs from current file {}", latestBackupPath, originalPath);
-                }
-                return result;
-            } catch (IOException e) {
-                LOGGER.debug("Could not compare original file and backup file.", e);
-                // User has to investigate in this case
-                return true;
-            }
-        }).orElse(false);
+        return false;
     }
+
+    private static boolean compareBackupWithOriginal(Path originalPath, Path latestBackupPath) {
+        FileTime backupLastModified = getFileLastModifiedTime(latestBackupPath);
+        FileTime originalLastModified = getFileLastModifiedTime(originalPath);
+
+        if ((backupLastModified == null) || (originalLastModified == null)) {
+            return false;
+        }
+
+        if (backupLastModified.compareTo(originalLastModified) <= 0) {
+            return false; // Backup is older or equal to the original
+        }
+
+        return filesDiffer(originalPath, latestBackupPath);
+    }
+
+    private static FileTime getFileLastModifiedTime(Path path) {
+        try {
+            return Files.getLastModifiedTime(path);
+        } catch (IOException e) {
+            LOGGER.debug("Could not get timestamp of file {}", path, e);
+            return null;
+        }
+    }
+
+    private static boolean filesDiffer(Path originalPath, Path latestBackupPath) {
+        try {
+            boolean result = Files.mismatch(originalPath, latestBackupPath) != -1L;
+            if (result) {
+                LOGGER.info("Backup file {} differs from current file {}", latestBackupPath, originalPath);
+            }
+            return result;
+        } catch (IOException e) {
+            LOGGER.debug("Could not compare original file and backup file.", e);
+            return true;
+        }
+    }
+
 
     /**
      * Restores the backup file by copying and overwriting the original one.
@@ -227,7 +241,14 @@ public class BackupManager {
             return;
         }
 
-        // We opted for "while" to delete backups in case there are more than 10
+        deleteExcessBackupFiles();
+        SelfContainedSaveConfiguration saveConfiguration = createSaveConfiguration();
+        BibDatabaseContext bibDatabaseContextClone = cloneDatabaseContext();
+
+        saveBackupFile(backupPath, saveConfiguration, bibDatabaseContextClone);
+    }
+
+    private void deleteExcessBackupFiles() {
         while (backupFilesQueue.size() >= MAXIMUM_BACKUP_FILE_COUNT) {
             Path oldestBackupFile = backupFilesQueue.poll();
             try {
@@ -236,40 +257,43 @@ public class BackupManager {
                 LOGGER.error("Could not delete backup file {}", oldestBackupFile, e);
             }
         }
+    }
 
-        // code similar to org.jabref.gui.exporter.SaveDatabaseAction.saveDatabase
-        SelfContainedSaveOrder saveOrder = bibDatabaseContext
-                .getMetaData().getSaveOrder()
-                .map(so -> {
-                    if (so.getOrderType() == SaveOrder.OrderType.TABLE) {
-                        // We need to "flatten out" SaveOrder.OrderType.TABLE as BibWriter does not have access to preferences
-                        List<TableColumn<BibEntryTableViewModel, ?>> sortOrder = libraryTab.getMainTable().getSortOrder();
-                        return new SelfContainedSaveOrder(
-                                SaveOrder.OrderType.SPECIFIED,
-                                sortOrder.stream()
-                                         .filter(col -> col instanceof MainTableColumn<?>)
-                                         .map(column -> ((MainTableColumn<?>) column).getModel())
-                                         .flatMap(model -> model.getSortCriteria().stream())
-                                         .toList());
-                    } else {
-                        return SelfContainedSaveOrder.of(so);
-                    }
-                })
+    private SelfContainedSaveConfiguration createSaveConfiguration() {
+        SelfContainedSaveOrder saveOrder = bibDatabaseContext.getMetaData().getSaveOrder()
+                .map(this::resolveSaveOrder)
                 .orElse(SaveOrder.getDefaultSaveOrder());
-        SelfContainedSaveConfiguration saveConfiguration = (SelfContainedSaveConfiguration) new SelfContainedSaveConfiguration()
+
+        return (SelfContainedSaveConfiguration) new SelfContainedSaveConfiguration()
                 .withMakeBackup(false)
                 .withSaveOrder(saveOrder)
                 .withReformatOnSave(preferences.getLibraryPreferences().shouldAlwaysReformatOnSave());
+    }
 
-        // "Clone" the database context
-        // We "know" that "only" the BibEntries might be changed during writing (see [org.jabref.logic.exporter.BibDatabaseWriter.savePartOfDatabase])
-        List<BibEntry> list = bibDatabaseContext.getDatabase().getEntries().stream()
-                                                .map(BibEntry::clone)
-                                                .map(BibEntry.class::cast)
-                                                .toList();
-        BibDatabase bibDatabaseClone = new BibDatabase(list);
-        BibDatabaseContext bibDatabaseContextClone = new BibDatabaseContext(bibDatabaseClone, bibDatabaseContext.getMetaData());
+    private SelfContainedSaveOrder resolveSaveOrder(SaveOrder order) {
+        if (order.getOrderType() == SaveOrder.OrderType.TABLE) {
+            List<TableColumn<BibEntryTableViewModel, ?>> sortOrder = libraryTab.getMainTable().getSortOrder();
+            return new SelfContainedSaveOrder(
+                    SaveOrder.OrderType.SPECIFIED,
+                    sortOrder.stream()
+                            .filter(col -> col instanceof MainTableColumn<?>)
+                            .map(column -> ((MainTableColumn<?>) column).getModel())
+                            .flatMap(model -> model.getSortCriteria().stream())
+                            .toList());
+        } else {
+            return SelfContainedSaveOrder.of(order);
+        }
+    }
 
+    private BibDatabaseContext cloneDatabaseContext() {
+        List<BibEntry> clonedEntries = bibDatabaseContext.getDatabase().getEntries().stream()
+                .map(BibEntry::clone)
+                .map(BibEntry.class::cast)
+                .toList();
+        return new BibDatabaseContext(new BibDatabase(clonedEntries), bibDatabaseContext.getMetaData());
+    }
+
+    private void saveBackupFile(Path backupPath, SelfContainedSaveConfiguration saveConfiguration, BibDatabaseContext bibDatabaseContextClone) {
         Charset encoding = bibDatabaseContext.getMetaData().getEncoding().orElse(StandardCharsets.UTF_8);
         // We want to have successful backups only
         // Thus, we do not use a plain "FileWriter", but the "AtomicFileWriter"
