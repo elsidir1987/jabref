@@ -217,18 +217,39 @@ public class LibraryTab extends Tab {
             createIndexManager();
         }
 
+        unbindPreviousTableModel();
+        registerDatabaseListeners();
+        initializeCaches();
+        initializeImportHandler();
+        setupUIComponents();
+        setupEntryEditor();
+        setupAIIntegration();
+        setupAsyncListeners();
+    }
+    //releases the previous table model
+    private void unbindPreviousTableModel() {
         if (tableModel != null) {
             tableModel.unbind();
         }
-
         bibDatabaseContext.getDatabase().registerListener(this);
         bibDatabaseContext.getMetaData().registerListener(this);
+    }
+    //register listeners
+    private void registerDatabaseListeners() {
+        this.getDatabase().registerListener(new IndexUpdateListener());
+        this.getDatabase().registerListener(new EntriesRemovedListener());
+        this.getDatabase().registerListener(new GroupTreeListener());
+        this.getDatabase().registerListener(new UpdateTimestampListener(preferences));
+    }
 
-        this.selectedGroupsProperty = new SimpleListProperty<>(stateManager.getSelectedGroups(bibDatabaseContext));
-        this.tableModel = new MainTableDataModel(getBibDatabaseContext(), preferences, taskExecutor, getIndexManager(), selectedGroupsProperty(), searchQueryProperty(), resultSizeProperty());
-
+    //sets caches,system uses
+    private void initializeCaches() {
         new CitationStyleCache(bibDatabaseContext);
         annotationCache = new FileAnnotationCache(bibDatabaseContext, preferences.getFilePreferences());
+    }
+
+    //make and sets the Handler
+    private void initializeImportHandler() {
         importHandler = new ImportHandler(
                 bibDatabaseContext,
                 preferences,
@@ -237,30 +258,29 @@ public class LibraryTab extends Tab {
                 stateManager,
                 dialogService,
                 taskExecutor);
-
+    }
+    //setup the GUI
+    private void setupUIComponents() {
         setupMainPanel();
         setupAutoCompletion();
-
-        this.getDatabase().registerListener(new IndexUpdateListener());
-        this.getDatabase().registerListener(new EntriesRemovedListener());
-
-        // ensure that at each addition of a new entry, the entry is added to the groups interface
-        this.bibDatabaseContext.getDatabase().registerListener(new GroupTreeListener());
-        // ensure that all entry changes mark the panel as changed
-        this.bibDatabaseContext.getDatabase().registerListener(this);
-
-        this.getDatabase().registerListener(new UpdateTimestampListener(preferences));
-
+    }
+    //setup editor gor registers
+    private void setupEntryEditor() {
         this.entryEditor = createEntryEditor();
-
+    }
+    //sets the AI services
+    private void setupAIIntegration() {
         aiService.setupDatabase(bibDatabaseContext);
-
+    }
+    //sets listeners that run async
+    private void setupAsyncListeners() {
         Platform.runLater(() -> {
             EasyBind.subscribe(changedProperty, this::updateTabTitle);
             stateManager.getOpenDatabases().addListener((ListChangeListener<BibDatabaseContext>) c ->
                     updateTabTitle(changedProperty.getValue()));
         });
     }
+
 
     private EntryEditor createEntryEditor() {
         Supplier<LibraryTab> tabSupplier = () -> this;

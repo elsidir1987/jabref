@@ -291,43 +291,42 @@ public class ArXivFetcher implements FulltextFetcher, PagedSearchBasedFetcher, I
      * @throws FetcherException when failed to fetch the main ArtXiv Bibtex entry ('arXivBibEntryFuture').
      */
     private void inplaceAsyncInfuseArXivWithDoi(CompletableFuture<Optional<BibEntry>> arXivBibEntryFuture, Optional<ArXivIdentifier> arXivId) throws FetcherException {
-
-        Optional<CompletableFuture<Optional<BibEntry>>> automaticDoiBibEntryFuture;
-        Optional<BibEntry> arXivBibEntry;
-
-        Optional<String> automaticDoi;
-        Optional<String> manualDoi;
-
-        // We can accelerate the processing time by initiating a parallel request for DOIFetcher with an ArXiv-issued DOI alongside the ArXiv fetching itself,
-        // BUT ONLY IF we have a valid arXivId. If not, the ArXiv entry must be retrieved before, which invalidates this optimization (although we can still speed
-        // up the process by running both the ArXiv-assigned and user-assigned DOI fetching at the same time, if an entry has this last information)
-        if (arXivId.isPresent()) {
-            automaticDoi = Optional.of(ArXivFetcher.getAutomaticDoi(arXivId.get()));
-            automaticDoiBibEntryFuture = Optional.of(doiFetcher.asyncPerformSearchById(automaticDoi.get()));
-
-            arXivBibEntry = ArXivFetcher.waitForBibEntryRetrieval(arXivBibEntryFuture);
-            if (arXivBibEntry.isEmpty()) {
-                return;
-            }
-        } else {
-            // If ArXiv fetch fails (FetcherException), exception must be passed onwards for the transparency of this class (original ArXiv fetcher does the same)
-            arXivBibEntry = ArXivFetcher.waitForBibEntryRetrieval(arXivBibEntryFuture);
-            if (arXivBibEntry.isEmpty()) {
-                return;
-            }
-
-            automaticDoi = ArXivFetcher.getAutomaticDoi(arXivBibEntry.get());
-            automaticDoiBibEntryFuture = automaticDoi.map(arXiv::asyncPerformSearchById);
+        Optional<BibEntry> arXivBibEntry = fetchArXivEntry(arXivBibEntryFuture, arXivId);
+        if (arXivBibEntry.isEmpty()) {
+            return;
         }
 
-        manualDoi = ArXivFetcher.getManualDoi(arXivBibEntry.get());
-        Optional<CompletableFuture<Optional<BibEntry>>> manualDoiBibEntryFuture = manualDoi.map(doiFetcher::asyncPerformSearchById);
+        Optional<CompletableFuture<Optional<BibEntry>>> automaticDoiBibEntryFuture = fetchAutomaticDoi(arXivId, arXivBibEntry);
+        Optional<CompletableFuture<Optional<BibEntry>>> manualDoiBibEntryFuture = fetchManualDoi(arXivBibEntry);
 
         automaticDoiBibEntryFuture.ifPresent(future ->
-                mergeArXivEntryWithFutureDoiEntry(arXivBibEntry.get(), future, CHOSEN_AUTOMATIC_DOI_FIELDS, automaticDoi.get()));
+                mergeArXivEntryWithFutureDoiEntry(arXivBibEntry.get(), future, CHOSEN_AUTOMATIC_DOI_FIELDS, ArXivFetcher.getAutomaticDoi(arXivBibEntry.get()).get()));
         manualDoiBibEntryFuture.ifPresent(future ->
-                mergeArXivEntryWithFutureDoiEntry(arXivBibEntry.get(), future, CHOSEN_MANUAL_DOI_FIELDS, manualDoi.get()));
+                mergeArXivEntryWithFutureDoiEntry(arXivBibEntry.get(), future, CHOSEN_MANUAL_DOI_FIELDS, ArXivFetcher.getManualDoi(arXivBibEntry.get()).get()));
     }
+    /* Handles the ArXiv Entry
+
+     */
+    private Optional<BibEntry> fetchArXivEntry(CompletableFuture<Optional<BibEntry>> arXivBibEntryFuture, Optional<ArXivIdentifier> arXivId) throws FetcherException {
+        if (arXivId.isPresent()) {
+            return ArXivFetcher.waitForBibEntryRetrieval(arXivBibEntryFuture);
+        } else {
+            return ArXivFetcher.waitForBibEntryRetrieval(arXivBibEntryFuture);
+        }
+    }
+    //Finds the DOI
+    private Optional<CompletableFuture<Optional<BibEntry>>> fetchAutomaticDoi(Optional<ArXivIdentifier> arXivId, Optional<BibEntry> arXivBibEntry) {
+        if (arXivId.isPresent()) {
+            return Optional.of(doiFetcher.asyncPerformSearchById(ArXivFetcher.getAutomaticDoi(arXivId.get())));
+        } else {
+            return ArXivFetcher.getAutomaticDoi(arXivBibEntry.get()).map(doiFetcher::asyncPerformSearchById);
+        }
+    }
+    //Handles the finding of manual DOI
+    private Optional<CompletableFuture<Optional<BibEntry>>> fetchManualDoi(Optional<BibEntry> arXivBibEntry) {
+        return ArXivFetcher.getManualDoi(arXivBibEntry.get()).map(doiFetcher::asyncPerformSearchById);
+    }
+
 
     /**
      * Constructs a complex query string using the field prefixes specified at https://arxiv.org/help/api/user-manual

@@ -160,18 +160,26 @@ public class BibtexParser implements Parser {
      */
     public ParserResult parse(Reader in) throws IOException {
         Objects.requireNonNull(in);
-        pushbackReader = new PushbackReader(in, BibtexParser.LOOKAHEAD);
 
-        String newLineSeparator = determineNewLineSeparator();
-
-        // BibTeX related contents
-        initializeParserResult(newLineSeparator);
-
-        parseDatabaseID();
-
-        skipWhitespace();
+        initializeReader(in);
+        initializeParser();
 
         return parseFileContent();
+    }
+    //Makes the setup of pushbackReader,ensure that it's well configured
+    private void initializeReader(Reader in) {
+        pushbackReader = new PushbackReader(in, BibtexParser.LOOKAHEAD);
+    }
+    /* Finds the line separator
+       Configure the parser
+       Handles the database ID
+       Skip  white space
+     */
+    private void initializeParser() throws IOException {
+        String newLineSeparator = determineNewLineSeparator();
+        initializeParserResult(newLineSeparator);
+        parseDatabaseID();
+        skipWhitespace();
     }
 
     private String determineNewLineSeparator() throws IOException {
