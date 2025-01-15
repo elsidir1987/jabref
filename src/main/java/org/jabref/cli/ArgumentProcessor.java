@@ -196,50 +196,76 @@ public class ArgumentProcessor {
     public void processArguments() {
         uiCommands.clear();
 
-        if ((startupMode == Mode.INITIAL_START) && cli.isShowVersion()) {
-            cli.displayVersion();
-        }
-
-        if ((startupMode == Mode.INITIAL_START) && cli.isHelp()) {
-            CliOptions.printUsage(cliPreferences);
-            guiNeeded = false;
+        if (handleInitialStartup()) {
             return;
         }
 
         guiNeeded = true;
 
-        // Check if we should reset all preferences to default values:
+        handlePreferenceOperations();
+        List<ParserResult> loaded = importAndOpenFiles();
+        handleFetchingOperations(loaded);
+        handleMetadataOperations(loaded);
+        handleExportOperations(loaded);
+        handleAuxImportOperations(loaded);
+
+        if (cli.isBlank()) {
+            uiCommands.add(new UiCommand.BlankWorkspace());
+        } else if (cli.isJumpToKey()) {
+            uiCommands.add(new UiCommand.JumpToEntryKey(cli.getJumpToKey()));
+        } else if (!loaded.isEmpty()) {
+            uiCommands.add(new UiCommand.OpenDatabases(loaded));
+        }
+    }
+
+    private boolean handleInitialStartup() {
+        if ((startupMode == Mode.INITIAL_START) && cli.isShowVersion()) {
+            cli.displayVersion();
+            return true;
+        }
+
+        if ((startupMode == Mode.INITIAL_START) && cli.isHelp()) {
+            CliOptions.printUsage(cliPreferences);
+            guiNeeded = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    private void handlePreferenceOperations() {
         if (cli.isPreferencesReset()) {
             resetPreferences(cli.getPreferencesReset());
         }
 
-        // Check if we should import preferences from a file:
         if (cli.isPreferencesImport()) {
             importPreferences();
         }
+    }
 
-        List<ParserResult> loaded = importAndOpenFiles();
-
+    private void handleFetchingOperations(List<ParserResult> loaded) {
         if (!cli.isBlank() && cli.isFetcherEngine()) {
             fetch(cli.getFetcherEngine()).ifPresent(loaded::add);
         }
 
-        if (cli.isExportMatches()) {
-            if (!loaded.isEmpty()) {
-                if (!exportMatches(loaded)) {
-                    return;
-                }
-            } else {
-                System.err.println(Localization.lang("The output option depends on a valid input option."));
+        if (cli.isExportMatches() && !loaded.isEmpty()) {
+            if (!exportMatches(loaded)) {
+                return;
             }
+        } else if (cli.isExportMatches()) {
+            System.err.println(Localization.lang("The output option depends on a valid input option."));
         }
 
         if (cli.isGenerateCitationKeys()) {
             regenerateCitationKeys(loaded);
         }
+    }
 
-        if ((cli.isWriteXmpToPdf() && cli.isEmbedBibFileInPdf()) || (cli.isWriteMetadataToPdf() && (cli.isWriteXmpToPdf() || cli.isEmbedBibFileInPdf()))) {
+    private void handleMetadataOperations(List<ParserResult> loaded) {
+        if ((cli.isWriteXmpToPdf() && cli.isEmbedBibFileInPdf())
+                || (cli.isWriteMetadataToPdf() && (cli.isWriteXmpToPdf() || cli.isEmbedBibFileInPdf()))) {
             System.err.println("Give only one of [writeXmpToPdf, embedBibFileInPdf, writeMetadataToPdf]");
+            return;
         }
 
         if (cli.isWriteMetadataToPdf() || cli.isWriteXmpToPdf() || cli.isEmbedBibFileInPdf()) {
@@ -256,7 +282,9 @@ public class ArgumentProcessor {
                         cli.isEmbedBibFileInPdf() || cli.isWriteMetadataToPdf());
             }
         }
+    }
 
+    private void handleExportOperations(List<ParserResult> loaded) {
         if (cli.isFileExport()) {
             if (!loaded.isEmpty()) {
                 exportFile(loaded, cli.getFileExport().split(","));
@@ -273,38 +301,29 @@ public class ArgumentProcessor {
                 LOGGER.error("Cannot export preferences", ex);
             }
         }
+    }
 
+    private void handleAuxImportOperations(List<ParserResult> loaded) {
         if (!cli.isBlank() && cli.isAuxImport()) {
             doAuxImport(loaded);
-        }
-
-        if (cli.isBlank()) {
-            uiCommands.add(new UiCommand.BlankWorkspace());
-        }
-
-        if (!cli.isBlank() && cli.isJumpToKey()) {
-            uiCommands.add(new UiCommand.JumpToEntryKey(cli.getJumpToKey()));
-        }
-
-        if (!cli.isBlank() && !loaded.isEmpty()) {
-            uiCommands.add(new UiCommand.OpenDatabases(loaded));
         }
     }
 
     private static void writeMetadataToPdf(List<ParserResult> loaded,
-                                    String filesAndCiteKeys,
-                                    XmpPreferences xmpPreferences,
-                                    FilePreferences filePreferences,
-                                    BibDatabaseMode databaseMode,
-                                    BibEntryTypesManager entryTypesManager,
-                                    FieldPreferences fieldPreferences,
-                                    JournalAbbreviationRepository abbreviationRepository,
-                                    boolean writeXMP,
-                                    boolean embeddBibfile) {
+                                           String filesAndCiteKeys,
+                                           XmpPreferences xmpPreferences,
+                                           FilePreferences filePreferences,
+                                           BibDatabaseMode databaseMode,
+                                           BibEntryTypesManager entryTypesManager,
+                                           FieldPreferences fieldPreferences,
+                                           JournalAbbreviationRepository abbreviationRepository,
+                                           boolean writeXMP,
+                                           boolean embedBibfile) {
         if (loaded.isEmpty()) {
             LOGGER.error("The write xmp option depends on a valid import option.");
             return;
         }
+
         ParserResult pr = loaded.getLast();
         BibDatabaseContext databaseContext = pr.getDatabaseContext();
 
@@ -312,49 +331,56 @@ public class ArgumentProcessor {
         EmbeddedBibFilePdfExporter embeddedBibFilePdfExporter = new EmbeddedBibFilePdfExporter(databaseMode, entryTypesManager, fieldPreferences);
 
         if ("all".equals(filesAndCiteKeys)) {
-            for (BibEntry entry : databaseContext.getEntries()) {
-                writeMetadataToPDFsOfEntry(
-                        databaseContext,
-                        entry.getCitationKey().orElse("<no cite key defined>"),
-                        entry,
-                        filePreferences,
-                        xmpPdfExporter,
-                        embeddedBibFilePdfExporter,
-                        abbreviationRepository,
-                        writeXMP,
-                        embeddBibfile);
-            }
+            writeMetadataForAllEntries(databaseContext, filePreferences, xmpPdfExporter, embeddedBibFilePdfExporter, abbreviationRepository, writeXMP, embedBibfile);
             return;
         }
 
+        List<String> citeKeys = extractCiteKeys(filesAndCiteKeys);
+        List<String> pdfs = extractPdfPaths(filesAndCiteKeys);
+
+        writeMetadataToPdfByCitekey(databaseContext, citeKeys, filePreferences, xmpPdfExporter, embeddedBibFilePdfExporter, abbreviationRepository, writeXMP, embedBibfile);
+        writeMetadataToPdfByFileNames(databaseContext, pdfs, filePreferences, xmpPdfExporter, embeddedBibFilePdfExporter, abbreviationRepository, writeXMP, embedBibfile);
+    }
+
+    private static void writeMetadataForAllEntries(BibDatabaseContext databaseContext,
+                                                   FilePreferences filePreferences,
+                                                   XmpPdfExporter xmpPdfExporter,
+                                                   EmbeddedBibFilePdfExporter embeddedBibFilePdfExporter,
+                                                   JournalAbbreviationRepository abbreviationRepository,
+                                                   boolean writeXMP,
+                                                   boolean embedBibfile) {
+        for (BibEntry entry : databaseContext.getEntries()) {
+            writeMetadataToPDFsOfEntry(
+                    databaseContext,
+                    entry.getCitationKey().orElse("<no cite key defined>"),
+                    entry,
+                    filePreferences,
+                    xmpPdfExporter,
+                    embeddedBibFilePdfExporter,
+                    abbreviationRepository,
+                    writeXMP,
+                    embedBibfile);
+        }
+    }
+
+    private static List<String> extractCiteKeys(String filesAndCiteKeys) {
         List<String> citeKeys = new ArrayList<>();
+        for (String fileOrCiteKey : filesAndCiteKeys.split(",")) {
+            if (!fileOrCiteKey.toLowerCase(Locale.ROOT).endsWith(".pdf")) {
+                citeKeys.add(fileOrCiteKey);
+            }
+        }
+        return citeKeys;
+    }
+
+    private static List<String> extractPdfPaths(String filesAndCiteKeys) {
         List<String> pdfs = new ArrayList<>();
         for (String fileOrCiteKey : filesAndCiteKeys.split(",")) {
             if (fileOrCiteKey.toLowerCase(Locale.ROOT).endsWith(".pdf")) {
                 pdfs.add(fileOrCiteKey);
-            } else {
-                citeKeys.add(fileOrCiteKey);
             }
         }
-
-        writeMetadataToPdfByCitekey(
-                databaseContext,
-                citeKeys,
-                filePreferences,
-                xmpPdfExporter,
-                embeddedBibFilePdfExporter,
-                abbreviationRepository,
-                writeXMP,
-                embeddBibfile);
-        writeMetadataToPdfByFileNames(
-                databaseContext,
-                pdfs,
-                filePreferences,
-                xmpPdfExporter,
-                embeddedBibFilePdfExporter,
-                abbreviationRepository,
-                writeXMP,
-                embeddBibfile);
+        return pdfs;
     }
 
     private static void writeMetadataToPDFsOfEntry(BibDatabaseContext databaseContext,
