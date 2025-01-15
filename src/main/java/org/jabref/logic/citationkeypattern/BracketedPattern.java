@@ -330,194 +330,100 @@ public class BracketedPattern {
     public static String getFieldValue(BibEntry entry, String pattern, Character keywordDelimiter, BibDatabase database) {
         try {
             if (pattern.startsWith("auth") || pattern.startsWith("pureauth")) {
-                // result the author
-                String unparsedAuthors = entry.getResolvedFieldOrAlias(StandardField.AUTHOR, database).orElse("");
-
-                if (pattern.startsWith("pure")) {
-                    // "pure" is used in the context of authors to resolve to authors only and not fallback to editors
-                    // The other functionality of the pattern "ForeIni", ... is the same
-                    // Thus, remove the "pure" prefix so the remaining code in this section functions correctly
-                    //
-                    pattern = pattern.substring(4);
-                } else if (unparsedAuthors.isEmpty()) {
-                    // special feature: A pattern starting with "auth" falls back to the editor
-                    unparsedAuthors = entry.getResolvedFieldOrAlias(StandardField.EDITOR, database).orElse("");
-                }
-
-                AuthorList authorList = createAuthorList(unparsedAuthors);
-
-                // Gather all author-related checks, so we don't
-                // have to check all the time.
-                switch (pattern) {
-                    case "auth":
-                        return firstAuthor(authorList);
-                    case "authForeIni":
-                        return firstAuthorForenameInitials(authorList);
-                    case "authFirstFull":
-                        return firstAuthorVonAndLast(authorList);
-                    case "authors":
-                        return allAuthors(authorList);
-                    case "authorsAlpha":
-                        return authorsAlpha(authorList);
-                    case "authorLast":
-                        return lastAuthor(authorList);
-                    case "authorLastForeIni":
-                        return lastAuthorForenameInitials(authorList);
-                    case "authorIni":
-                        return oneAuthorPlusInitials(authorList);
-                    case "auth.auth.ea":
-                        return authAuthEa(authorList);
-                    case "auth.etal":
-                        return authEtal(authorList, ".", ".etal");
-                    case "authEtAl":
-                        return authEtal(authorList, "", "EtAl");
-                    case "authshort":
-                        return authShort(authorList);
-                }
-
-                if (pattern.matches("authIni[\\d]+")) {
-                    int num = Integer.parseInt(pattern.substring(7));
-                    return authIniN(authorList, num);
-                } else if (pattern.matches("auth[\\d]+_[\\d]+")) {
-                    String[] nums = pattern.substring(4).split("_");
-                    return authNofMth(authorList, Integer.parseInt(nums[0]),
-                            Integer.parseInt(nums[1]));
-                } else if (pattern.matches("auth\\d+")) {
-                    // authN. First N chars of the first author's last name.
-                    int num = Integer.parseInt(pattern.substring(4));
-                    return authN(authorList, num);
-                } else if (pattern.matches("authors\\d+")) {
-                    return nAuthors(authorList, Integer.parseInt(pattern.substring(7)));
-                } else {
-                    // This "auth" business was a dead end, so just
-                    // use it literally:
-                    return entry.getResolvedFieldOrAlias(FieldFactory.parseField(pattern), database).orElse("");
-                }
+                return handleAuthorPattern(entry, pattern, database);
             } else if (pattern.startsWith("ed")) {
-                // Gather all markers starting with "ed" here, so we
-                // don't have to check all the time.
-                String unparsedEditors = entry.getResolvedFieldOrAlias(StandardField.EDITOR, database).orElse("");
-                AuthorList editorList = createAuthorList(unparsedEditors);
-
-                switch (pattern) {
-                    case "edtr":
-                        return firstAuthor(editorList);
-                    case "edtrForeIni":
-                        return firstAuthorForenameInitials(editorList);
-                    case "editors":
-                        return allAuthors(editorList);
-                    case "editorLast":
-                        return lastAuthor(editorList); // Last author's last name
-                    case "editorLastForeIni":
-                        return lastAuthorForenameInitials(editorList);
-                    case "editorIni":
-                        return oneAuthorPlusInitials(editorList);
-                    case "edtr.edtr.ea":
-                        return authAuthEa(editorList);
-                    case "edtrshort":
-                        return authShort(editorList);
-                }
-
-                if (pattern.matches("edtrIni[\\d]+")) {
-                    int num = Integer.parseInt(pattern.substring(7));
-                    return authIniN(editorList, num);
-                } else if (pattern.matches("edtr[\\d]+_[\\d]+")) {
-                    String[] nums = pattern.substring(4).split("_");
-                    return authNofMth(editorList,
-                            Integer.parseInt(nums[0]),
-                            Integer.parseInt(nums[1]));
-                } else if (pattern.matches("edtr\\d+")) {
-                    String fa = firstAuthor(editorList);
-                    int num = Integer.parseInt(pattern.substring(4));
-                    if (num > fa.length()) {
-                        num = fa.length();
-                    }
-                    return fa.substring(0, num);
-                } else {
-                    // This "ed" business was a dead end, so just
-                    // use it literally:
-                    return entry.getResolvedFieldOrAlias(FieldFactory.parseField(pattern), database).orElse("");
-                }
-            } else if ("firstpage".equals(pattern)) {
-                return firstPage(entry.getResolvedFieldOrAlias(StandardField.PAGES, database).orElse(""));
-            } else if ("pageprefix".equals(pattern)) {
-                return pagePrefix(entry.getResolvedFieldOrAlias(StandardField.PAGES, database).orElse(""));
-            } else if ("lastpage".equals(pattern)) {
-                return lastPage(entry.getResolvedFieldOrAlias(StandardField.PAGES, database).orElse(""));
-            } else if ("title".equals(pattern)) {
-                return camelizeSignificantWordsInTitle(entry.getResolvedFieldOrAlias(StandardField.TITLE, database).orElse(""));
-            } else if ("fulltitle".equals(pattern)) {
-                return entry.getResolvedFieldOrAlias(StandardField.TITLE, database).orElse("");
-            } else if ("shorttitle".equals(pattern)) {
-                return getTitleWords(3,
-                        removeSmallWords(entry.getResolvedFieldOrAlias(StandardField.TITLE, database).orElse("")));
-            } else if ("shorttitleINI".equals(pattern)) {
-                return keepLettersAndDigitsOnly(
-                        applyModifiers(getTitleWordsWithSpaces(3, entry.getResolvedFieldOrAlias(StandardField.TITLE, database).orElse("")),
-                                Collections.singletonList("abbr"), 0, Function.identity()));
-            } else if ("veryshorttitle".equals(pattern)) {
-                return getTitleWords(1,
-                        removeSmallWords(entry.getResolvedFieldOrAlias(StandardField.TITLE, database).orElse("")));
-            } else if (pattern.matches("camel[\\d]+")) {
-                int num = Integer.parseInt(pattern.substring(5));
-                return getCamelizedTitle_N(entry.getResolvedFieldOrAlias(StandardField.TITLE, database).orElse(""), num);
-            } else if ("camel".equals(pattern)) {
-                return getCamelizedTitle(entry.getResolvedFieldOrAlias(StandardField.TITLE, database).orElse(""));
-            } else if ("shortyear".equals(pattern)) {
-                String yearString = entry.getResolvedFieldOrAlias(StandardField.YEAR, database).orElse("");
-                if (yearString.isEmpty()) {
-                    return yearString;
-                    // In press/in preparation/submitted
-                } else if (yearString.startsWith("in") || yearString.startsWith("sub")) {
-                    return "IP";
-                } else if (yearString.length() > 2) {
-                    return yearString.substring(yearString.length() - 2);
-                } else {
-                    return yearString;
-                }
-            } else if ("entrytype".equals(pattern)) {
-                return entry.getResolvedFieldOrAlias(InternalField.TYPE_HEADER, database).orElse("");
-            } else if (pattern.matches("keyword\\d+")) {
-                // according to LabelPattern.php, it returns keyword number n
-                int num = Integer.parseInt(pattern.substring(7));
-                KeywordList separatedKeywords = entry.getResolvedKeywords(keywordDelimiter, database);
-                if (separatedKeywords.size() < num) {
-                    // not enough keywords
-                    return "";
-                } else {
-                    // num counts from 1 to n, but index in arrayList count from 0 to n-1
-                    return separatedKeywords.get(num - 1).toString();
-                }
-            } else if (pattern.matches("keywords\\d*")) {
-                // return all keywords, not separated
-                int num;
-                if (pattern.length() > 8) {
-                    num = Integer.parseInt(pattern.substring(8));
-                } else {
-                    num = Integer.MAX_VALUE;
-                }
-                KeywordList separatedKeywords = entry.getResolvedKeywords(keywordDelimiter, database);
-                StringBuilder sb = new StringBuilder();
-                int i = 0;
-                for (Keyword keyword : separatedKeywords) {
-                    // remove all spaces
-                    sb.append(keyword.toString().replaceAll("\\s+", ""));
-
-                    i++;
-                    if (i >= num) {
-                        break;
-                    }
-                }
-                return sb.toString();
+                return handleEditorPattern(entry, pattern, database);
             } else {
-                // we haven't seen any special demands
-                return entry.getResolvedFieldOrAlias(FieldFactory.parseField(pattern), database).orElse("");
+                return handleFieldPattern(entry, pattern, keywordDelimiter, database);
             }
         } catch (NullPointerException ex) {
-            LOGGER.debug("Problem making expanding bracketed expression", ex);
+            LOGGER.debug("Problem expanding bracketed expression", ex);
             return "";
         }
     }
+
+    private static String handleAuthorPattern(BibEntry entry, String pattern, BibDatabase database) {
+        String unparsedAuthors = entry.getResolvedFieldOrAlias(StandardField.AUTHOR, database).orElse("");
+        if (pattern.startsWith("pure")) {
+            pattern = pattern.substring(4);
+        } else if (unparsedAuthors.isEmpty()) {
+            unparsedAuthors = entry.getResolvedFieldOrAlias(StandardField.EDITOR, database).orElse("");
+        }
+        AuthorList authorList = createAuthorList(unparsedAuthors);
+
+        return switch (pattern) {
+            case "auth" -> firstAuthor(authorList);
+            case "authForeIni" -> firstAuthorForenameInitials(authorList);
+            case "authFirstFull" -> firstAuthorVonAndLast(authorList);
+            case "authors" -> allAuthors(authorList);
+            case "authorsAlpha" -> authorsAlpha(authorList);
+            case "authorLast" -> lastAuthor(authorList);
+            case "authorLastForeIni" -> lastAuthorForenameInitials(authorList);
+            case "authorIni" -> oneAuthorPlusInitials(authorList);
+            case "auth.auth.ea" -> authAuthEa(authorList);
+            case "auth.etal" -> authEtal(authorList, ".", ".etal");
+            case "authEtAl" -> authEtal(authorList, "", "EtAl");
+            case "authshort" -> authShort(authorList);
+            default -> handleAuthorPatternFallback(pattern, authorList);
+        };
+    }
+
+    private static String handleEditorPattern(BibEntry entry, String pattern, BibDatabase database) {
+        String unparsedEditors = entry.getResolvedFieldOrAlias(StandardField.EDITOR, database).orElse("");
+        AuthorList editorList = createAuthorList(unparsedEditors);
+
+        return switch (pattern) {
+            case "edtr" -> firstAuthor(editorList);
+            case "edtrForeIni" -> firstAuthorForenameInitials(editorList);
+            case "editors" -> allAuthors(editorList);
+            case "editorLast" -> lastAuthor(editorList);
+            case "editorLastForeIni" -> lastAuthorForenameInitials(editorList);
+            case "editorIni" -> oneAuthorPlusInitials(editorList);
+            case "edtr.edtr.ea" -> authAuthEa(editorList);
+            case "edtrshort" -> authShort(editorList);
+            default -> handleEditorPatternFallback(pattern, editorList);
+        };
+    }
+
+    private static String handleFieldPattern(BibEntry entry, String pattern, Character keywordDelimiter, BibDatabase database) {
+        return switch (pattern) {
+            case "firstpage" -> firstPage(entry.getResolvedFieldOrAlias(StandardField.PAGES, database).orElse(""));
+            case "pageprefix" -> pagePrefix(entry.getResolvedFieldOrAlias(StandardField.PAGES, database).orElse(""));
+            case "lastpage" -> lastPage(entry.getResolvedFieldOrAlias(StandardField.PAGES, database).orElse(""));
+            case "title" -> camelizeSignificantWordsInTitle(entry.getResolvedFieldOrAlias(StandardField.TITLE, database).orElse(""));
+            case "fulltitle" -> entry.getResolvedFieldOrAlias(StandardField.TITLE, database).orElse("");
+            default -> entry.getResolvedFieldOrAlias(FieldFactory.parseField(pattern), database).orElse("");
+        };
+    }
+
+    private static String handleAuthorPatternFallback(String pattern, AuthorList authorList) {
+        if (pattern.matches("authIni\\d+")) {
+            int num = Integer.parseInt(pattern.substring(7));
+            return authIniN(authorList, num);
+        } else if (pattern.matches("auth\\d+_\\d+")) {
+            String[] nums = pattern.substring(4).split("_");
+            return authNofMth(authorList, Integer.parseInt(nums[0]), Integer.parseInt(nums[1]));
+        } else if (pattern.matches("auth\\d+")) {
+            int num = Integer.parseInt(pattern.substring(4));
+            return authN(authorList, num);
+        } else {
+            return "";
+        }
+    }
+
+    private static String handleEditorPatternFallback(String pattern, AuthorList editorList) {
+        if (pattern.matches("edtrIni\\d+")) {
+            int num = Integer.parseInt(pattern.substring(7));
+            return authIniN(editorList, num);
+        } else if (pattern.matches("edtr\\d+")) {
+            String fa = firstAuthor(editorList);
+            int num = Integer.parseInt(pattern.substring(4));
+            return fa.length() > num ? fa.substring(0, num) : fa;
+        } else {
+            return "";
+        }
+    }
+
 
     /**
      * Parses the provided string to an {@link AuthorList}, which are then formatted by {@link LatexToUnicodeAdapter}.
@@ -1229,96 +1135,74 @@ public class BracketedPattern {
      */
      @VisibleForTesting
      static String generateInstitutionKey(String content) {
-        if (content == null) {
-            return null;
-        }
-        if (content.isBlank()) {
-            return "";
-        }
-        Matcher matcher = INLINE_ABBREVIATION.matcher(content);
-        if (matcher.find()) {
-            return LatexToUnicodeAdapter.format(matcher.group());
-        }
+         if (content == null || content.isBlank()) {
+             return content == null ? null : "";
+         }
 
-        Optional<String> unicodeFormattedName = LatexToUnicodeAdapter.parse(content);
-        if (unicodeFormattedName.isEmpty()) {
-            LOGGER.warn("{} could not be converted to unicode. This can result in an incorrect or missing institute citation key", content);
-        }
-        String result = unicodeFormattedName.orElse(Normalizer.normalize(content, Normalizer.Form.NFC));
+         Matcher matcher = INLINE_ABBREVIATION.matcher(content);
+         if (matcher.find()) {
+             return LatexToUnicodeAdapter.format(matcher.group());
+         }
 
-        // Special characters can't be allowed past this point because the citation key generator might replace them with multiple mixed-case characters
-        result = StringUtil.replaceSpecialCharacters(result);
+         String result = preprocessInstitutionContent(content);
+         String[] institutionNameTokens = result.split(",");
+         return buildInstitutionKey(institutionNameTokens);
+     }
 
-        String[] institutionNameTokens = result.split(",");
+    private static String preprocessInstitutionContent(String content) {
+        return LatexToUnicodeAdapter.parse(content)
+                .orElse(Normalizer.normalize(StringUtil.replaceSpecialCharacters(content), Normalizer.Form.NFC));
+    }
 
-        // Key parts
-        String university = null;
-        String department = null;
-        String school = null;
-        String rest = null;
+    private static String buildInstitutionKey(String[] tokens) {
+        String university = null, department = null, school = null, rest = null;
 
-        for (int index = 0; index < institutionNameTokens.length; index++) {
-            List<String> tokenParts = getValidInstitutionNameParts(institutionNameTokens[index]);
-            EnumSet<Institution> tokenTypes = Institution.findTypes(tokenParts);
+        for (int i = 0; i < tokens.length; i++) {
+            List<String> parts = getValidInstitutionNameParts(tokens[i]);
+            EnumSet<Institution> types = Institution.findTypes(parts);
 
-            if (tokenTypes.contains(Institution.UNIVERSITY)) {
-                StringBuilder universitySB = new StringBuilder();
-                // University part looks like: Uni[NameOfTheUniversity]
-                universitySB.append("Uni");
-                for (String k : tokenParts) {
-                    if (!"uni".regionMatches(true, 0, k, 0, 3)) {
-                        universitySB.append(k);
-                    }
-                }
-                university = universitySB.toString();
-                // If university is detected than the previous part is suggested
-                // as department
-                if ((index > 0) && (department == null)) {
-                    department = institutionNameTokens[index - 1];
-                }
-            } else if ((tokenTypes.contains(Institution.SCHOOL)
-                    || tokenTypes.contains(Institution.DEPARTMENT))
-                    && (institutionNameTokens.length > 1)) {
-                // School is an abbreviation of all the words beginning with a
-                // capital letter excluding: department, school and faculty words.
-                StringBuilder schoolSB = new StringBuilder();
-                StringBuilder departmentSB = new StringBuilder();
-                for (String k : tokenParts) {
-                    if (noOtherInstitutionKeyWord(k)) {
-                        if (tokenTypes.contains(Institution.SCHOOL)) {
-                            schoolSB.append(NOT_CAPITAL_CHARACTER.matcher(k).replaceAll(""));
-                        }
-                        // Explicitly defined department part is build the same way as school
-                        if (tokenTypes.contains(Institution.DEPARTMENT)) {
-                            departmentSB.append(NOT_CAPITAL_CHARACTER.matcher(k).replaceAll(""));
-                        }
-                    }
-                }
-                if (tokenTypes.contains(Institution.SCHOOL)) {
-                    school = schoolSB.toString();
-                }
-                if (tokenTypes.contains(Institution.DEPARTMENT)) {
-                    department = departmentSB.toString();
-                }
-            } else if (rest == null) {
-                // A part not matching university, department nor school
-                if (tokenParts.size() >= 3) {
-                    // If there are more than 3 parts, only keep the first character of each word
-                    final int[] codePoints = tokenParts.stream()
-                                                       .filter(Predicate.not(String::isBlank))
-                                                       .mapToInt(s -> s.codePointAt(0))
-                                                       .toArray();
-                    rest = new String(codePoints, 0, codePoints.length);
-                } else {
-                    rest = String.join("", tokenParts);
-                }
-            }
+            university = extractUniversityKey(parts, types, university);
+            department = extractDepartmentKey(parts, types, tokens, i, department);
+            school = extractSchoolKey(parts, types, school);
+            rest = extractRestKey(parts, rest);
         }
 
-        // Putting parts together.
-        return (university == null ? Objects.toString(rest, "") : university)
-                + (school == null ? "" : school)
-                + ((department == null) || (department.equals(school)) ? "" : department);
+        return combineInstitutionParts(university, school, department, rest);
+    }
+
+    private static String extractUniversityKey(List<String> parts, EnumSet<Institution> types, String currentUniversity) {
+        if (types.contains(Institution.UNIVERSITY)) {
+            StringBuilder sb = new StringBuilder("Uni");
+            parts.stream().filter(part -> !"uni".regionMatches(true, 0, part, 0, 3)).forEach(sb::append);
+            return sb.toString();
+        }
+        return currentUniversity;
+    }
+
+    private static String extractDepartmentKey(List<String> parts, EnumSet<Institution> types, String[] tokens, int index, String currentDepartment) {
+        if (types.contains(Institution.DEPARTMENT) && tokens.length > 1) {
+            return currentDepartment == null ? String.join("", parts) : currentDepartment;
+        }
+        return currentDepartment;
+    }
+
+    private static String extractSchoolKey(List<String> parts, EnumSet<Institution> types, String currentSchool) {
+        return types.contains(Institution.SCHOOL) ? String.join("", parts) : currentSchool;
+    }
+
+    private static String extractRestKey(List<String> parts, String currentRest) {
+        if (currentRest == null) {
+            return parts.size() >= 3
+                    ? parts.stream().map(part -> String.valueOf(part.charAt(0))).collect(Collectors.joining())
+                    : String.join("", parts);
+        }
+        return currentRest;
+    }
+
+    private static String combineInstitutionParts(String university, String school, String department, String rest) {
+        return (university == null ? Objects.toString(rest, "") : university) +
+                (school == null ? "" : school) +
+                ((department == null || department.equals(school)) ? "" : department);
     }
 
     /**
