@@ -5,12 +5,15 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import com.tobiasdiez.easybind.Subscription;
 import javafx.beans.InvalidationListener;
+import javafx.beans.Observable;
 import javafx.beans.WeakInvalidationListener;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.BooleanBinding;
 import javafx.beans.binding.IntegerBinding;
 import javafx.beans.property.SimpleBooleanProperty;
+import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
@@ -77,7 +80,7 @@ public class GroupNodeViewModel {
     @SuppressWarnings("FieldCanBeLocal")
     private final ObservableList<BibEntry> entriesList;
     @SuppressWarnings("FieldCanBeLocal")
-    private final InvalidationListener onInvalidatedGroup = listener -> refreshGroup();
+    private final InvalidationListener onInvalidatedGroup = (Observable listener) -> refreshGroup();
 
     public GroupNodeViewModel(BibDatabaseContext databaseContext, StateManager stateManager, TaskExecutor taskExecutor, GroupTreeNode groupNode, CustomLocalDragboard localDragBoard, GuiPreferences preferences) {
         this.databaseContext = Objects.requireNonNull(databaseContext);
@@ -110,9 +113,9 @@ public class GroupNodeViewModel {
 
         hasChildren = new SimpleBooleanProperty();
         hasChildren.bind(Bindings.isNotEmpty(children));
-        EasyBind.subscribe(preferences.getGroupsPreferences().displayGroupCountProperty(), shouldDisplay -> updateMatchedEntries());
+
         expandedProperty.set(groupNode.getGroup().isExpanded());
-        expandedProperty.addListener((observable, oldValue, newValue) -> groupNode.getGroup().setExpanded(newValue));
+        expandedProperty.addListener((ObservableValue<? extends Boolean> observable, Boolean oldValue, Boolean newValue) -> groupNode.getGroup().setExpanded(newValue));
 
         // Register listener
         // The wrapper created by the FXCollections will set a weak listener on the wrapped list. This weak listener gets garbage collected. Hence, we need to maintain a reference to this list.
@@ -140,22 +143,15 @@ public class GroupNodeViewModel {
     }
 
     public List<FieldChange> addEntriesToGroup(List<BibEntry> entries) {
-        // TODO: warn if assignment has undesired side effects (modifies a field != keywords)
-        // if (!WarnAssignmentSideEffects.warnAssignmentSideEffects(group, groupSelector.frame))
-        // {
-        //    return; // user aborted operation
-        // }
+        // Adding subscriptions to the group
+        List<FieldChange> fieldChanges = groupNode.addEntriesToGroup(entries);
 
-        var changes = groupNode.addEntriesToGroup(entries);
-
-        // Update appearance of group
+        // Update the appearance status of the group
         anySelectedEntriesMatched.invalidate();
         allSelectedEntriesMatched.invalidate();
 
-        return changes;
-        // TODO: Store undo
-        // if (!undo.isEmpty()) {
-        // groupSelector.concludeAssignment(UndoableChangeEntriesOfGroup.getUndoableEdit(target, undo), target.getNode(), assignedEntries);
+        // Return of changes applied to the fields
+        return fieldChanges;
     }
 
     public SimpleBooleanProperty expandedProperty() {
@@ -251,33 +247,49 @@ public class GroupNodeViewModel {
      * @implNote Search groups are updated in {@link SearchIndexListener}.
      */
     private void onDatabaseChanged(ListChangeListener.Change<? extends BibEntry> change) {
+        // Skip updates if the group is of type SearchGroup, as they are handled differently
         if (groupNode.getGroup() instanceof SearchGroup) {
             return;
         }
         while (change.next()) {
-            if (change.wasPermutated()) {
-                // Nothing to do, as permutation doesn't change matched entries
-            } else if (change.wasUpdated()) {
-                for (BibEntry changedEntry : change.getList().subList(change.getFrom(), change.getTo())) {
-                    if (groupNode.matches(changedEntry)) {
-                        // ADR-0038
-                        matchedEntries.add(changedEntry.getId());
-                    } else {
-                        // ADR-0038
-                        matchedEntries.remove(changedEntry.getId());
-                    }
+            handlePermutations(change);
+            handleUpdates(change);
+            handleRemovals(change);
+            handleAdditions(change);
+        }
+    }
+    // Handle permutations in the entries. Currently, no action is required for permutations.
+    private void handlePermutations(ListChangeListener.Change<? extends BibEntry> change) {
+        if (change.wasPermutated()) {
+            // Nothing to do, as permutation doesn't change matched entries
+        }
+    }
+    // Handle updates to entries, such as modifications to their fields
+    private void handleUpdates(ListChangeListener.Change<? extends BibEntry> change) {
+        if (change.wasUpdated()) {
+            for (BibEntry changedEntry : change.getList().subList(change.getFrom(), change.getTo())) {
+                // Check if the changed entry still matches the group
+                if (groupNode.matches(changedEntry)) {
+                    matchedEntries.add(changedEntry.getId());
+                } else {
+                    matchedEntries.remove(changedEntry.getId());
                 }
-            } else {
-                for (BibEntry removedEntry : change.getRemoved()) {
-                    // ADR-0038
-                    matchedEntries.remove(removedEntry.getId());
-                }
-                for (BibEntry addedEntry : change.getAddedSubList()) {
-                    if (groupNode.matches(addedEntry)) {
-                        // ADR-0038
-                        matchedEntries.add(addedEntry.getId());
-                    }
-                }
+            }
+        }
+    }
+    // Handle removals of entries from the database
+    private void handleRemovals(ListChangeListener.Change<? extends BibEntry> change) {
+        for (BibEntry removedEntry : change.getRemoved()) {
+            // Remove the entry ID from the matched entries set
+            matchedEntries.remove(removedEntry.getId());
+        }
+    }
+    // Handle additions of new entries to the database
+    private void handleAdditions(ListChangeListener.Change<? extends BibEntry> change) {
+        for (BibEntry addedEntry : change.getAddedSubList()) {
+            // Check if the new entry matches the group and add its ID if it does
+            if (groupNode.matches(addedEntry)) {
+                matchedEntries.add(addedEntry.getId());
             }
         }
     }
@@ -341,14 +353,14 @@ public class GroupNodeViewModel {
      * </ul>
      */
     public boolean acceptableDrop(Dragboard dragboard) {
-        // TODO: we should also check isNodeDescendant
+
         boolean canDropOtherGroup = dragboard.hasContent(DragAndDropDataFormats.GROUP);
         boolean canDropEntries = localDragBoard.hasBibEntries() && (groupNode.getGroup() instanceof GroupEntryChanger);
         return canDropOtherGroup || canDropEntries;
     }
 
     public void moveTo(GroupNodeViewModel target) {
-        // TODO: Add undo and display message
+
         // MoveGroupChange undo = new MoveGroupChange(((GroupTreeNodeViewModel)source.getParent()).getNode(),
         //        source.getNode().getPositionInParent(), target.getNode(), target.getChildCount());
 
@@ -548,21 +560,19 @@ public class GroupNodeViewModel {
         @Subscribe
         public void listen(IndexAddedOrUpdatedEvent event) {
             if (groupNode.getGroup() instanceof SearchGroup searchGroup) {
-                stateManager.getIndexManager(databaseContext).ifPresent(indexManager -> {
-                    BackgroundTask.wrap(() -> {
-                        for (BibEntry entry : event.entries()) {
-                            searchGroup.updateMatches(entry, indexManager.isEntryMatched(entry, searchGroup.getSearchQuery()));
+                stateManager.getIndexManager(databaseContext).ifPresent(indexManager -> BackgroundTask.wrap(() -> {
+                    for (BibEntry entry : event.entries()) {
+                        searchGroup.updateMatches(entry, indexManager.isEntryMatched(entry, searchGroup.getSearchQuery()));
+                    }
+                }).onFinished(() -> {
+                    for (BibEntry entry : event.entries()) {
+                        if (groupNode.matches(entry)) {
+                            matchedEntries.add(entry.getId());
+                        } else {
+                            matchedEntries.remove(entry.getId());
                         }
-                    }).onFinished(() -> {
-                        for (BibEntry entry : event.entries()) {
-                            if (groupNode.matches(entry)) {
-                                matchedEntries.add(entry.getId());
-                            } else {
-                                matchedEntries.remove(entry.getId());
-                            }
-                        }
-                    }).executeWith(taskExecutor);
-                });
+                    }
+                }).executeWith(taskExecutor));
             }
         }
 
@@ -578,7 +588,7 @@ public class GroupNodeViewModel {
 
         @Subscribe
         public void listen(IndexClosedEvent event) {
-            if (groupNode.getGroup() instanceof SearchGroup group) {
+            if (groupNode.getGroup() instanceof SearchGroup) {
                 databaseContext.getDatabase().unregisterListener(this);
             }
         }
