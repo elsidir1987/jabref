@@ -17,6 +17,7 @@ import javax.swing.undo.UndoManager;
 
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableBooleanValue;
+import javafx.beans.value.ObservableValue;
 import javafx.scene.control.ButtonType;
 
 import org.jabref.gui.ClipBoardManager;
@@ -51,6 +52,9 @@ import org.jabref.model.util.FileUpdateMonitor;
 import org.jooq.lambda.Unchecked;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+
+
 
 public class JabRefFrameViewModel implements UiMessageHandler {
     private static final Logger LOGGER = LoggerFactory.getLogger(JabRefFrameViewModel.class);
@@ -157,7 +161,7 @@ public class JabRefFrameViewModel implements UiMessageHandler {
             return;
         }
 
-        assert !uiCommands.isEmpty();
+        if (uiCommands.isEmpty()) throw new AssertionError();
 
         // Handle blank workspace
         boolean blank = uiCommands.stream().anyMatch(UiCommand.BlankWorkspace.class::isInstance);
@@ -255,7 +259,7 @@ public class JabRefFrameViewModel implements UiMessageHandler {
         try {
             return dirsToCheck.stream()
                               .map(Path::toAbsolutePath)
-                              .flatMap(Unchecked.function(dir -> Files.list(dir)))
+                              .flatMap(Unchecked.function(Files::list))
                               .filter(path -> FileUtil.getFileExtension(path).equals(Optional.of("bib")))
                               .findFirst();
         } catch (UncheckedIOException ex) {
@@ -270,59 +274,47 @@ public class JabRefFrameViewModel implements UiMessageHandler {
     ///
     /// @param parserResults A modifiable list of parser results
     private void openDatabases(List<ParserResult> parserResults) {
-        final List<ParserResult> toOpenTab = new ArrayList<>();
-
-        // Remove invalid databases
-        List<ParserResult> invalidDatabases = parserResults.stream()
-                                                           .filter(ParserResult::isInvalid)
-                                                           .toList();
-        final List<ParserResult> failed = new ArrayList<>(invalidDatabases);
+        List<ParserResult> invalidDatabases = extractInvalidDatabases(parserResults);
+        List<ParserResult> failedDatabases = new ArrayList<>(invalidDatabases);
         parserResults.removeAll(invalidDatabases);
 
-        // passed file (we take the first one) should be focused
-        Path focusedFile = parserResults.stream()
-                                        .findFirst()
-                                        .flatMap(ParserResult::getPath)
-                                        .orElse(preferences.getLastFilesOpenedPreferences()
-                                                           .getLastFocusedFile())
-                                        .toAbsolutePath();
+        Path focusedFile = determineFocusedFile(parserResults);
 
-        // Add all bibDatabases databases to the frame:
+        List<ParserResult> toOpenTab = new ArrayList<>();
+        processParserResults(parserResults, focusedFile, toOpenTab);
+
+        handleFailedDatabases(failedDatabases);
+        handleParserWarnings(parserResults);
+        performPostOpenActions(parserResults);
+
+        LOGGER.debug("Finished adding panels");
+    }
+
+    private List<ParserResult> extractInvalidDatabases(List<ParserResult> parserResults) {
+        return parserResults.stream()
+                .filter(ParserResult::isInvalid)
+                .toList();
+    }
+
+    private Path determineFocusedFile(List<ParserResult> parserResults) {
+        return parserResults.stream()
+                .findFirst()
+                .flatMap(ParserResult::getPath)
+                .orElse(preferences.getLastFilesOpenedPreferences().getLastFocusedFile())
+                .toAbsolutePath();
+    }
+
+    private void processParserResults(List<ParserResult> parserResults, Path focusedFile, List<ParserResult> toOpenTab) {
         boolean first = false;
+
         for (ParserResult parserResult : parserResults) {
-            // Define focused tab
             if (parserResult.getPath().filter(path -> path.toAbsolutePath().equals(focusedFile)).isPresent()) {
                 first = true;
             }
 
             if (parserResult.getDatabase().isShared()) {
-                try {
-                    OpenDatabaseAction.openSharedDatabase(
-                            parserResult,
-                            tabContainer,
-                            dialogService,
-                            preferences,
-                            aiService,
-                            stateManager,
-                            entryTypesManager,
-                            fileUpdateMonitor,
-                            undoManager,
-                            clipBoardManager,
-                            taskExecutor);
-                } catch (SQLException
-                         | DatabaseNotSupportedException
-                         | InvalidDBMSConnectionPropertiesException
-                         | NotASharedDatabaseException e) {
-                    LOGGER.error("Connection error", e);
-                    dialogService.showErrorDialogAndWait(
-                            Localization.lang("Connection error"),
-                            Localization.lang("A local copy will be opened."),
-                            e);
-                    toOpenTab.add(parserResult);
-                }
+                handleSharedDatabase(parserResult, toOpenTab);
             } else if (parserResult.toOpenTab()) {
-                // things to be appended to an opened tab should be done after opening all tabs
-                // add them to the list
                 toOpenTab.add(parserResult);
             } else {
                 addParserResult(parserResult, first);
@@ -330,47 +322,81 @@ public class JabRefFrameViewModel implements UiMessageHandler {
             }
         }
 
-        // finally add things to the currently opened tab
         for (ParserResult parserResult : toOpenTab) {
             addParserResult(parserResult, first);
             first = false;
         }
+    }
 
-        for (ParserResult parserResult : failed) {
+    private void handleSharedDatabase(ParserResult parserResult, List<ParserResult> toOpenTab) {
+        try {
+            OpenDatabaseAction.openSharedDatabase(
+                    parserResult,
+                    tabContainer,
+                    dialogService,
+                    preferences,
+                    aiService,
+                    stateManager,
+                    entryTypesManager,
+                    fileUpdateMonitor,
+                    undoManager,
+                    clipBoardManager,
+                    taskExecutor);
+        } catch (SQLException | DatabaseNotSupportedException | InvalidDBMSConnectionPropertiesException | NotASharedDatabaseException e) {
+            LOGGER.error("Connection error", e);
+            dialogService.showErrorDialogAndWait(
+                    Localization.lang("Connection error"),
+                    Localization.lang("A local copy will be opened."),
+                    e);
+            toOpenTab.add(parserResult);
+        }
+    }
+    private void handleFailedDatabases(List<ParserResult> failedDatabases) {
+        for (ParserResult parserResult : failedDatabases) {
             String message = Localization.lang("Error opening file '%0'",
                     parserResult.getPath().map(Path::toString).orElse("(File name unknown)")) + "\n" +
                     parserResult.getErrorMessage();
             dialogService.showErrorDialogAndWait(Localization.lang("Error opening file"), message);
         }
+    }
 
-        // Display warnings, if any
+    private void handleParserWarnings(List<ParserResult> parserResults) {
         for (ParserResult parserResult : parserResults) {
             if (parserResult.hasWarnings()) {
                 ParserResultWarningDialog.showParserResultWarningDialog(parserResult, dialogService);
                 getLibraryTab(parserResult).ifPresent(tabContainer::showLibraryTab);
             }
         }
+    }
 
-        // After adding the databases, go through each and see if
-        // any post open actions need to be done. For instance, checking
-        // if we found new entry types that can be imported, or checking
-        // if the database contents should be modified due to new features
-        // in this version of JabRef.
+    private void performPostOpenActions(List<ParserResult> parserResults) {
         parserResults.forEach(pr -> {
             OpenDatabaseAction.performPostOpenActions(pr, dialogService, preferences);
             if (pr.getChangedOnMigration()) {
                 getLibraryTab(pr).ifPresent(LibraryTab::markBaseChanged);
             }
         });
-
-        LOGGER.debug("Finished adding panels");
     }
 
     private Optional<LibraryTab> getLibraryTab(ParserResult parserResult) {
         return tabContainer.getLibraryTabs().stream()
-                           .filter(tab -> parserResult.getDatabase().equals(tab.getDatabase()))
-                           .findAny();
+                .filter(tab -> parserResult.getDatabase().equals(tab.getDatabase()))
+                .findAny();
     }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     /**
      * Should be called when a user asks JabRef at the command line
@@ -415,23 +441,26 @@ public class JabRefFrameViewModel implements UiMessageHandler {
                                                             .collect(Collectors.toList());
 
         // Create a listener for each observable
-        ChangeListener<Boolean> listener = (observable, oldValue, newValue) -> {
-            if (observable != null) {
-                loadings.remove(observable);
-            }
-            if (LOGGER.isTraceEnabled()) {
-                LOGGER.trace("Count of loading tabs: {}", loadings.size());
-                LOGGER.trace("Count of loading tabs really true: {}", loadings.stream().filter(ObservableBooleanValue::get).count());
-            }
-            for (ObservableBooleanValue obs : loadings) {
-                if (obs.get()) {
-                    // Exit the listener if any of the observables is still true
-                    return;
+        ChangeListener<Boolean> listener = new ChangeListener<Boolean>() {
+            @Override
+            public void changed(ObservableValue<? extends Boolean> observable, Boolean oldValue, Boolean newValue) {
+                if (observable != null) {
+                    loadings.remove(observable);
                 }
+                if (LOGGER.isTraceEnabled()) {
+                    LOGGER.trace("Count of loading tabs: {}", loadings.size());
+                    LOGGER.trace("Count of loading tabs really true: {}", loadings.stream().filter(ObservableBooleanValue::get).count());
+                }
+                for (ObservableBooleanValue obs : loadings) {
+                    if (obs.get()) {
+                        // Exit the listener if any of the observables is still true
+                        return;
+                    }
+                }
+                // All observables are false, complete the future
+                LOGGER.trace("Future completed");
+                future.complete(null);
             }
-            // All observables are false, complete the future
-            LOGGER.trace("Future completed");
-            future.complete(null);
         };
 
         for (ObservableBooleanValue obs : loadings) {
@@ -495,8 +524,6 @@ public class JabRefFrameViewModel implements UiMessageHandler {
     }
 
     void autoSetFileLinks(List<ParserResult> loaded) {
-        for (ParserResult parserResult : loaded) {
-            new AutoLinkFilesAction(dialogService, preferences, stateManager, undoManager, (UiTaskExecutor) taskExecutor).execute();
-        }
+        loaded.forEach(parserResult -> new AutoLinkFilesAction(dialogService, preferences, stateManager, undoManager, (UiTaskExecutor) taskExecutor).execute());
     }
 }
